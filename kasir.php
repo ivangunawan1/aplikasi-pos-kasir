@@ -34,7 +34,8 @@ $filter_kat = $_GET['kat'] ?? '';
 
 // Query Produk berdasarkan filter
 if ($filter_kat != '') {
-    $produk = mysqli_query($koneksi, "SELECT * FROM produk WHERE stok > 0 AND kategori = '$filter_kat'");
+    $filter_kat_aman = mysqli_real_escape_string($koneksi, $filter_kat);
+    $produk = mysqli_query($koneksi, "SELECT * FROM produk WHERE stok > 0 AND kategori = '$filter_kat_aman'");
 } else {
     $produk = mysqli_query($koneksi, "SELECT * FROM produk WHERE stok > 0");
 }

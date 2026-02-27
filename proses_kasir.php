@@ -2,55 +2,76 @@
 session_start();
 include "koneksi.php";
 
-$total_akhir = $_POST['total_akhir'];
-$diskon      = $_POST['diskon']; // <--- Tangkap nilai diskon dari kasir.php
-$metode      = $_POST['metode_bayar'];
-$bayar       = $_POST['bayar'];
+// === SANITASI INPUT ===
+// Paksa tipe data yang benar — ini mencegah SQL Injection dari $_POST
+$total_akhir = (float) $_POST['total_akhir'];
+$diskon      = (float) $_POST['diskon'];
+$metode      = mysqli_real_escape_string($koneksi, $_POST['metode_bayar']);
+$bayar       = (float) $_POST['bayar'];
 $kembali     = $bayar - $total_akhir;
 $tanggal     = date("Y-m-d H:i:s");
+$id_kasir    = (int) $_SESSION['id'];
 
-// Ambil ID Kasir dari session
-$id_kasir    = $_SESSION['id']; 
-
-if($bayar < $total_akhir) {
+// === VALIDASI ===
+if ($bayar < $total_akhir) {
     echo "<script>alert('Uang bayar kurang!'); window.history.back();</script>";
     exit;
 }
 
-// 1. Insert ke tabel penjualan
-$query_p = mysqli_query($koneksi, "INSERT INTO penjualan (tanggal, total_harga, diskon, metode_pembayaran, bayar, kembalian, id_user) 
-                                   VALUES ('$tanggal', '$total_akhir', '$diskon', '$metode', '$bayar', '$kembali', '$id_kasir')");
+if (empty($_SESSION['keranjang'])) {
+    echo "<script>alert('Keranjang kosong!'); window.history.back();</script>";
+    exit;
+}
 
-// 2. LANGSUNG ambil ID-nya di sini sebelum panggil fungsi lain!
+// === 1. INSERT KE TABEL PENJUALAN (Prepared Statement) ===
+$stmt = mysqli_prepare($koneksi, "INSERT INTO penjualan (tanggal, total_harga, diskon, metode_pembayaran, bayar, kembalian, id_user) 
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)");
+mysqli_stmt_bind_param($stmt, "sddsddi", $tanggal, $total_akhir, $diskon, $metode, $bayar, $kembali, $id_kasir);
+$query_p = mysqli_stmt_execute($stmt);
 $id_penjualan = mysqli_insert_id($koneksi);
+mysqli_stmt_close($stmt);
 
-// 3. Baru catat log (agar tidak mengganggu ID insert)
-if($query_p) {
+// === 2. CATAT LOG ===
+if ($query_p) {
     catat_log($koneksi, $id_kasir, "Melakukan transaksi baru #" . $id_penjualan . " senilai Rp " . number_format($total_akhir));
 }
 
-// 3. Simpan rincian barang ke tabel DETAIL_PENJUALAN (Logika stok tetap sama)
-if(!empty($_SESSION['keranjang'])) {
-    foreach($_SESSION['keranjang'] as $id_produk => $jumlah) {
-        
-        $ambil_produk = mysqli_query($koneksi, "SELECT * FROM produk WHERE id='$id_produk'");
-        $dt = mysqli_fetch_array($ambil_produk);
-        $harga_satuan = $dt['harga'];
-        $subtotal     = $harga_satuan * $jumlah;
-        $stok_sekarang = $dt['stok'];
+// === 3. SIMPAN DETAIL & POTONG STOK ===
+foreach ($_SESSION['keranjang'] as $id_produk => $jumlah) {
+    $id_produk = (int) $id_produk;
+    $jumlah    = (int) $jumlah;
 
-        mysqli_query($koneksi, "INSERT INTO detail_penjualan (id_penjualan, id_produk, jumlah, harga_satuan, subtotal) 
-                                VALUES ('$id_penjualan', '$id_produk', '$jumlah', '$harga_satuan', '$subtotal')");
+    // Ambil data produk
+    $stmt2 = mysqli_prepare($koneksi, "SELECT harga, stok FROM produk WHERE id = ?");
+    mysqli_stmt_bind_param($stmt2, "i", $id_produk);
+    mysqli_stmt_execute($stmt2);
+    $result = mysqli_stmt_get_result($stmt2);
+    $dt = mysqli_fetch_assoc($result);
+    mysqli_stmt_close($stmt2);
 
-        // Potong stok produk
-        $stok_baru = $stok_sekarang - $jumlah;
-        mysqli_query($koneksi, "UPDATE produk SET stok='$stok_baru' WHERE id='$id_produk'");
+    if (!$dt) continue; // Skip kalau produk tidak ditemukan
+
+    $harga_satuan = (float) $dt['harga'];
+    $subtotal     = $harga_satuan * $jumlah;
+    $stok_baru    = (int) $dt['stok'] - $jumlah;
+
+    // Insert detail penjualan
+    $stmt3 = mysqli_prepare($koneksi, "INSERT INTO detail_penjualan (id_penjualan, id_produk, jumlah, harga_satuan, subtotal) 
+                                        VALUES (?, ?, ?, ?, ?)");
+    mysqli_stmt_bind_param($stmt3, "iiidd", $id_penjualan, $id_produk, $jumlah, $harga_satuan, $subtotal);
+    mysqli_stmt_execute($stmt3);
+    mysqli_stmt_close($stmt3);
+
+    // Update stok (tidak bisa negatif)
+    if ($stok_baru >= 0) {
+        $stmt4 = mysqli_prepare($koneksi, "UPDATE produk SET stok = ? WHERE id = ?");
+        mysqli_stmt_bind_param($stmt4, "ii", $stok_baru, $id_produk);
+        mysqli_stmt_execute($stmt4);
+        mysqli_stmt_close($stmt4);
     }
 }
 
-// Kosongkan keranjang setelah sukses
+// === 4. BERSIHKAN KERANJANG & REDIRECT ===
 unset($_SESSION['keranjang']);
-
-// Lempar ke halaman cetak nota
 header("location:cetak_nota.php?id=$id_penjualan");
 ?>

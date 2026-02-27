@@ -2,7 +2,7 @@
 $host = "localhost";
 $user = "root";
 $pass = "";
-$db   = "belajar_pos";
+$db   = "pos_app";
 
 $koneksi = mysqli_connect($host, $user, $pass, $db);
 

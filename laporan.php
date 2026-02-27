@@ -1,39 +1,27 @@
 <?php 
 session_start();
-// Jika bukan admin, tendang balik ke dashboard
 if ($_SESSION['level'] != "admin") {
     header("location:index.php?pesan=bukan_admin");
     exit;
 }
 include "koneksi.php";
 
-$tgl1 = isset($_GET['tgl1']) ? $_GET['tgl1'] : date('Y-m-01');
-$tgl2 = isset($_GET['tgl2']) ? $_GET['tgl2'] : date('Y-m-d');
+// === SANITASI TANGGAL ===
+$tgl1 = isset($_GET['tgl1']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['tgl1']) ? $_GET['tgl1'] : date('Y-m-01');
+$tgl2 = isset($_GET['tgl2']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['tgl2']) ? $_GET['tgl2'] : date('Y-m-d');
 
-// 1. QUERY REKAP PRODUK + HITUNG CUAN
-$sql_rekap = "SELECT 
-                pr.nama_produk, 
-                SUM(dp.jumlah) as total_qty, 
-                SUM(dp.subtotal) as total_uang,
-                SUM(pr.harga_modal * dp.jumlah) as total_modal
-              FROM penjualan p
-              JOIN detail_penjualan dp ON p.id_penjualan = dp.id_penjualan
-              JOIN produk pr ON dp.id_produk = pr.id
-              WHERE DATE(p.tanggal) BETWEEN '$tgl1' AND '$tgl2'
-              GROUP BY pr.id ORDER BY total_qty DESC";
-$query_rekap = mysqli_query($koneksi, $sql_rekap);
+// === QUERY REKAP PRODUK (Prepared Statement) ===
+$stmt1 = mysqli_prepare($koneksi, "SELECT pr.nama_produk, SUM(dp.jumlah) as total_qty, SUM(dp.subtotal) as total_uang, SUM(pr.harga_modal * dp.jumlah) as total_modal FROM penjualan p JOIN detail_penjualan dp ON p.id_penjualan = dp.id_penjualan JOIN produk pr ON dp.id_produk = pr.id WHERE DATE(p.tanggal) BETWEEN ? AND ? GROUP BY pr.id ORDER BY total_qty DESC");
+mysqli_stmt_bind_param($stmt1, "ss", $tgl1, $tgl2);
+mysqli_stmt_execute($stmt1);
+$query_rekap = mysqli_stmt_get_result($stmt1);
 
-// 2. QUERY RIWAYAT TRANSAKSI + NAMA USER (KASIR)
-// Kita gunakan LEFT JOIN ke tabel user agar nama kasir muncul
-// Ganti u.nama menjadi u.username
-$sql_riwayat = "SELECT p.*, u.username as nama_kasir 
-                FROM penjualan p
-                LEFT JOIN user u ON p.id_user = u.id_user
-                WHERE DATE(p.tanggal) BETWEEN '$tgl1' AND '$tgl2' 
-                ORDER BY p.tanggal DESC";
-$query_riwayat = mysqli_query($koneksi, $sql_riwayat);
+// === QUERY RIWAYAT TRANSAKSI (Prepared Statement) ===
+$stmt2 = mysqli_prepare($koneksi, "SELECT p.*, u.username as nama_kasir FROM penjualan p LEFT JOIN user u ON p.id_user = u.id_user WHERE DATE(p.tanggal) BETWEEN ? AND ? ORDER BY p.tanggal DESC");
+mysqli_stmt_bind_param($stmt2, "ss", $tgl1, $tgl2);
+mysqli_stmt_execute($stmt2);
+$query_riwayat = mysqli_stmt_get_result($stmt2);
 ?>
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -57,42 +45,33 @@ $query_riwayat = mysqli_query($koneksi, $sql_riwayat);
         </div>
 
         <form method="GET" action="" style="display: flex; gap: 10px; align-items: center; background: #f8fafc; padding: 15px; border-radius: 12px; margin-bottom: 20px;">
-            <input type="date" name="tgl1" value="<?php echo $tgl1; ?>" style="padding: 8px; border-radius: 6px; border: 1px solid #ddd;">
+            <input type="date" name="tgl1" value="<?php echo htmlspecialchars($tgl1); ?>" style="padding: 8px; border-radius: 6px; border: 1px solid #ddd;">
             <span style="color: #64748b;">s/d</span>
-            <input type="date" name="tgl2" value="<?php echo $tgl2; ?>" style="padding: 8px; border-radius: 6px; border: 1px solid #ddd;">
-            
+            <input type="date" name="tgl2" value="<?php echo htmlspecialchars($tgl2); ?>" style="padding: 8px; border-radius: 6px; border: 1px solid #ddd;">
             <button type="submit" class="btn btn-filter">🔍 Filter</button>
-            
-            <a href="ekspor_excel.php?tgl1=<?php echo $tgl1; ?>&tgl2=<?php echo $tgl2; ?>" class="btn btn-excel">
-                📊 Ekspor ke Excel
-            </a>
+            <a href="ekspor_excel.php?tgl1=<?php echo $tgl1; ?>&tgl2=<?php echo $tgl2; ?>" class="btn btn-excel">📊 Ekspor ke Excel</a>
         </form>
 
         <div class="section-title"><strong>📦 Ringkasan Produk Terjual</strong></div>
         <table class="table-custom">
             <thead>
-                <tr>
-                    <th>Produk</th>
-                    <th>Terjual</th>
-                    <th>Omzet (Kotor)</th>
-                    <th>Laba Bersih</th> </tr>
+                <tr><th>Produk</th><th>Terjual</th><th>Omzet (Kotor)</th><th>Laba Bersih</th></tr>
             </thead>
             <tbody>
                 <?php 
-                $grand_kotor = 0;
-                $grand_bersih = 0;
+                $grand_kotor = 0; $grand_bersih = 0;
                 while($row = mysqli_fetch_array($query_rekap)){ 
-                    $laba_bersih = $row['total_uang'] - $row['total_modal']; // RUMUS CUAN
+                    $laba_bersih = $row['total_uang'] - $row['total_modal'];
                     $grand_kotor += $row['total_uang'];
                     $grand_bersih += $laba_bersih;
                 ?>
                 <tr>
-                    <td><?php echo $row['nama_produk']; ?></td>
+                    <td><?php echo htmlspecialchars($row['nama_produk']); ?></td>
                     <td><?php echo $row['total_qty']; ?></td>
                     <td>Rp <?php echo number_format($row['total_uang']); ?></td>
                     <td style="color: #10b981; font-weight: bold;">Rp <?php echo number_format($laba_bersih); ?></td>
                 </tr>
-                <?php } ?>
+                <?php } mysqli_stmt_close($stmt1); ?>
             </tbody>
             <tfoot>
                 <tr style="font-weight:bold; background:#f8fafc; font-size: 1.1em;">
@@ -106,24 +85,17 @@ $query_riwayat = mysqli_query($koneksi, $sql_riwayat);
         <div class="section-title"><strong>🧾 Riwayat Transaksi</strong></div>
         <table class="table-custom">
             <thead>
-                <tr>
-                    <th>Waktu</th>
-                    <th>Kasir</th>
-                    <th>Total Bayar</th>
-                    <th>Aksi</th>
-                </tr>
+                <tr><th>Waktu</th><th>Kasir</th><th>Total Bayar</th><th>Aksi</th></tr>
             </thead>
             <tbody>
                 <?php while($h = mysqli_fetch_array($query_riwayat)){ ?>
                 <tr>
                     <td><?php echo date('d/m H:i', strtotime($h['tanggal'])); ?></td>
-                    <td><span class="badge-kasir">👤 <?php echo $h['nama_kasir'] ?? 'System'; ?></span></td>
+                    <td><span class="badge-kasir">👤 <?php echo htmlspecialchars($h['nama_kasir'] ?? 'System'); ?></span></td>
                     <td><strong>Rp <?php echo number_format($h['total_harga']); ?></strong></td>
-                    <td>
-                        <a href="cetak_nota.php?id=<?php echo $h['id_penjualan']; ?>" target="_blank" class="btn-print">🖨️ Cetak Nota</a>
-                    </td>
+                    <td><a href="cetak_nota.php?id=<?php echo (int)$h['id_penjualan']; ?>" target="_blank" class="btn-print">🖨️ Cetak Nota</a></td>
                 </tr>
-                <?php } ?>
+                <?php } mysqli_stmt_close($stmt2); ?>
             </tbody>
         </table>
     </div>

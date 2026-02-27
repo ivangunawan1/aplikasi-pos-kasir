@@ -1,19 +1,33 @@
 <?php
-session_start(); // Tambahkan ini di baris paling atas
+session_start();
 include "koneksi.php";
 
-$id = $_GET['id'];
-$id_user = $_SESSION['id']; // Ambil ID user dari session
+// === CEK LOGIN & ROLE ADMIN ===
+if ($_SESSION['status'] != "login" || $_SESSION['level'] != "admin") {
+    header("location:index.php?pesan=bukan_admin");
+    exit;
+}
 
-// Catat log SEBELUM data dihapus agar kita tahu nama produknya (Opsional tapi bagus)
-$ambil_nama = mysqli_query($koneksi, "SELECT nama_produk FROM produk WHERE id='$id'");
-$data_p = mysqli_fetch_array($ambil_nama);
-$nama_p = $data_p['nama_produk'];
+$id      = (int) $_GET['id'];
+$id_user = (int) $_SESSION['id'];
 
-$query = "DELETE FROM produk WHERE id = '$id'";
+// Ambil nama produk untuk log (pakai prepared statement)
+$stmt = mysqli_prepare($koneksi, "SELECT nama_produk FROM produk WHERE id = ?");
+mysqli_stmt_bind_param($stmt, "i", $id);
+mysqli_stmt_execute($stmt);
+$result = mysqli_stmt_get_result($stmt);
+$data_p = mysqli_fetch_assoc($result);
+mysqli_stmt_close($stmt);
 
-if (mysqli_query($koneksi, $query)) {
-    // CATAT LOG PENGHAPUSAN
+$nama_p = $data_p['nama_produk'] ?? 'tidak diketahui';
+
+// Hapus produk
+$stmt2 = mysqli_prepare($koneksi, "DELETE FROM produk WHERE id = ?");
+mysqli_stmt_bind_param($stmt2, "i", $id);
+$query = mysqli_stmt_execute($stmt2);
+mysqli_stmt_close($stmt2);
+
+if ($query) {
     catat_log($koneksi, $id_user, "Menghapus produk: $nama_p (ID: $id)");
     header("location:index.php");
 } else {
